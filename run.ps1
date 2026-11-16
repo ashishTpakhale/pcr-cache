@@ -12,7 +12,7 @@ $cpu = (Get-Item 'HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0').GetValu
 & "$env:SystemRoot\System32\cmd.exe" /d /c ".\bench.exe > replay.tmp 2> timing.txt"
 if ($LASTEXITCODE) { throw 'Replay or self-test failed' }
 $rows = Import-Csv replay.tmp
-if ($rows.Count -ne 540) { throw 'Incomplete matrix' }
+if ($rows.Count -ne 630) { throw 'Incomplete matrix' }
 foreach ($pair in ($rows | Group-Object workload,seed)) {
     if (@($pair.Group.trace_hash | Sort-Object -Unique).Count -ne 1) { throw 'Unpaired traces' }
 }
@@ -56,4 +56,5 @@ foreach ($r in $summary) {
 }
 $lines | Set-Content RESULTS.md
 Write-Output "Verified $($rows.Count) runs. Results in RESULTS.md."
+
 

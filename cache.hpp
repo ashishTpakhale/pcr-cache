@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -64,6 +65,33 @@ struct PCR : Order {
                 v = v >= 4 ? v - 4 : std::max(0, v - 1);
         }
         return slot;
+    }
+};
+
+struct PCR2 {
+    // Reuse evidence expires after the current and previous pressure epochs.
+    std::uint16_t current{}, previous{};
+    u8 phase{}, trial{};
+    void hit(int slot) { current |= 1u << slot; }
+    int admit(int n) {
+        if (n < ways) return n;
+        const unsigned reused = current | previous;
+        if ((phase & 7) == 7 || (reused & (1u << trial))) {
+            unsigned cold = (~reused) & 0xffff;
+            unsigned after = cold & (0xffffu << (trial + 1));
+            // Wrap to the first cold slot. If all are hot, advance one slot.
+            unsigned candidates = after ? after : cold;
+            trial = candidates ? std::countr_zero(candidates) : (trial + 1) % ways;
+        }
+        const unsigned keep = ~(1u << trial);
+        previous &= keep;
+        current &= keep;
+        if (++phase == ways) {
+            previous = current;
+            current = 0;
+            phase = 0;
+        }
+        return trial;
     }
 };
 

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <iostream>
+#include <fstream>
 #include <memory>
 #include <new>
 #include <numeric>
@@ -109,6 +110,51 @@ Trace generate(int workload, int seed) {
     return trace;
 }
 
+template<class P>
+void diagnose(const Trace &trace, int seed, int workload, const char *name,
+              std::size_t budget, std::ostream &out) {
+    using Bucket = Set<P>;
+    const int count = budget / sizeof(Bucket);
+    std::vector<Bucket> sets(count);
+    long long hits = 0, misses = 0, candidates = 0, epochs = 0;
+    long long subset = 0, subsetHits = 0;
+    std::vector<int> coreCount(count);
+    auto index = [&](u64 hash) { return ((hash >> 32) * count) >> 32; };
+    for (int k = 0; k < 8192; ++k) ++coreCount[index(mix(k))];
+    for (int i = 0; i < int(trace.keys.size()); ++i) {
+        u64 key = trace.keys[i], hash = mix(key);
+        auto &b = sets[index(hash)];
+        if (i >= warm && b.size == ways &&
+            std::none_of(b.entries, b.entries+ways, [&](auto &e){return e.first == key;})) {
+            auto &p = b.policy;
+            if constexpr (std::is_same_v<P,PCR>) {
+                for (int slot : p.id) {
+                    ++candidates;
+                    if (!(p.state[slot]&3) && std::find(p.recent,p.recent+3,slot)==p.recent+3) break;
+                }
+                epochs += p.phase == ways-1;
+            } else if constexpr (std::is_same_v<P,SIEVE>) {
+                unsigned bits = p.visited;
+                int r = p.hand;
+                while (++candidates && (bits & (1u << p.id[r]))) {
+                    bits &= ~(1u << p.id[r]);
+                    r = (r+1)%ways;
+                }
+            }
+        }
+        auto result = b.access(key,hash);
+        if (i < warm) continue;
+        hits += result.hit;
+        misses += !result.hit;
+        if ((workload == 1 && key >= 200000) || (workload == 2 && key < 8192)) {
+            ++subset;
+            subsetHits += result.hit;
+        }
+    }
+    out << name << ',' << budget << ',' << workload << ',' << seed << ',' << hits << ','
+        << misses << ',' << candidates << ',' << epochs << ',' << subset << ',' << subsetHits
+        << ',' << *std::min_element(coreCount.begin(),coreCount.end()) << '\n';
+}
 struct Stats { int hits{}; u64 checksum{}; };
 template<class P, std::size_t budget>
 void replay(const Trace &trace, const char *policy, const char *load, int seed, int rep) {
@@ -179,18 +225,26 @@ int main() {
     std::cerr << "Affinity mask " << core << ", QPC Hz " << frequency.QuadPart << std::endl;
     selftest();
     using Fn = void(*)(const Trace&,const char*,const char*,int,int);
-    Fn run[][6] = {
-        {replay<PCR,65536>, replay<LRU,65536>, replay<SIEVE,65536>, replay<LFU,65536>, replay<AdaptiveClimb,65536>, replay<WTinyLFU,65536>},
-        {replay<PCR,262144>, replay<LRU,262144>, replay<SIEVE,262144>, replay<LFU,262144>, replay<AdaptiveClimb,262144>, replay<WTinyLFU,262144>}
+    Fn run[][7] = {
+        {replay<PCR,65536>, replay<LRU,65536>, replay<SIEVE,65536>, replay<LFU,65536>, replay<AdaptiveClimb,65536>, replay<WTinyLFU,65536>, replay<PCR2,65536>},
+        {replay<PCR,262144>, replay<LRU,262144>, replay<SIEVE,262144>, replay<LFU,262144>, replay<AdaptiveClimb,262144>, replay<WTinyLFU,262144>, replay<PCR2,262144>}
     };
-    const char *names[] = {"PCR","LRU","SIEVE","LFU","AdaptiveClimb","W-TinyLFU"};
+    const char *names[] = {"PCR","LRU","SIEVE","LFU","AdaptiveClimb","W-TinyLFU","PCR2"};
     const char *loads[] = {"Zipf","Flash","ScanLoop"};
     std::cout<<"policy,workload,seed,rep,budget,set_bytes,sets,warm,requests,hits,elapsed_ns,samples,p99_ns,p99_ticks,trace_hash\n";
+    std::ofstream diag("diagnostics.csv");
+    diag.exceptions(std::ios::badbit | std::ios::failbit);
+    diag << "policy,budget,workload,seed,hits,misses,candidates,age_passes,subset_requests,subset_hits,min_core_per_set\n";
     for (int seed=41; seed<=45; ++seed) {
         for (int w=0; w<3; ++w) {
             auto trace = generate(w,seed);
+            for (auto budget : {65536u,262144u}) {
+                diagnose<PCR>(trace,seed,w,"PCR",budget,diag);
+                diagnose<PCR2>(trace,seed,w,"PCR2",budget,diag);
+                diagnose<SIEVE>(trace,seed,w,"SIEVE",budget,diag);
+            }
             for (int rep=0; rep<3; ++rep) {
-                std::array<int,6> order{0,1,2,3,4,5};
+                std::array<int,7> order{0,1,2,3,4,5,6};
                 std::mt19937 ordering(seed*100+w*10+rep);
                 std::shuffle(order.begin(),order.end(),ordering);
                 for (int b=0; b<2; ++b)
@@ -199,5 +253,6 @@ int main() {
         }
     }
 }
+
 
 
