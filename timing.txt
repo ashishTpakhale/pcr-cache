@@ -1,0 +1,1 @@
+Affinity mask 1, QPC Hz 10000000
